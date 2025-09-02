@@ -1,18 +1,14 @@
 from django.db import models
 
-# Create your models here.
-from django.db import models
-
-
 class HMSMI(models.Model):
-    BillNumber = models.CharField(max_length=50, unique=True)
+    BillNumber = models.CharField(max_length=50, primary_key=True)
     BillType = models.CharField(max_length=50)
-    BilIDate = models.DateField()
-    subtestcode= models.CharField(max_length=50)
-    subtestname= models.CharField(max_length=60)
-    serialnumber= models.CharField(max_length=50)
-    mobilenumber=models.IntegerField()
-    IPOPType = models.CharField(max_length=20)   # e.g., IP / OP
+    BillDate = models.DateTimeField()
+    SubTestcode = models.CharField(max_length=50, blank=True, null=True)
+    SubTestName = models.CharField(max_length=500, blank=True, null=True)
+    SerialNumber = models.CharField(max_length=50, blank=True, null=True)
+    mobilenumber = models.CharField(max_length=25)
+    IPOPType = models.CharField(max_length=20) 
     IPOPNumber = models.CharField(max_length=50)
     PatientTitle = models.CharField(max_length=10)  # e.g., Mr, Ms, Dr
     PatientName = models.CharField(max_length=100)
@@ -22,14 +18,11 @@ class HMSMI(models.Model):
     TestCode = models.CharField(max_length=50)
     TestName = models.CharField(max_length=100)
 
-    created_at = models.DateTimeField(auto_now_add=True)  # optional
-    updated_at = models.DateTimeField(auto_now=True)      # optional
+    created_date = models.DateTimeField(auto_now_add=True)  
+    updated_date = models.DateTimeField(auto_now=True)      
 
     def __str__(self):
         return f"{self.BillNumber} - {self.PatientName}"
-
-
-from django.db import models
 
 
 class TestResult(models.Model):
@@ -50,8 +43,8 @@ class TestResult(models.Model):
         ("OTHER", "Other"),
     ])
 
-    created_at = models.DateTimeField(auto_now_add=True)  # optional audit field
-    updated_at = models.DateTimeField(auto_now=True)
+    created_date = models.DateTimeField(auto_now_add=True)  # optional audit field
+    updated_date = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.patientname} - {self.testcode} ({self.resultdate})"
