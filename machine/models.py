@@ -1,7 +1,7 @@
 from django.db import models
 
 class HMSMI(models.Model):
-    BillNumber = models.CharField(max_length=50, primary_key=True)
+    BillNumber = models.CharField(max_length=50)
     BillType = models.CharField(max_length=50)
     BillDate = models.DateTimeField()
     SubTestcode = models.CharField(max_length=50, blank=True, null=True)
@@ -48,3 +48,4 @@ class TestResult(models.Model):
 
     def __str__(self):
         return f"{self.patientname} - {self.testcode} ({self.resultdate})"
+
