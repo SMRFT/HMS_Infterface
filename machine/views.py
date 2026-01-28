@@ -1,45 +1,94 @@
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-from .serializers import HMSMISerializer
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
+from .serializers import HMSMISerializer
 import os
 import json
 import requests
 from datetime import datetime
 from pymongo import MongoClient
-from .models import TestResult, MachineAutomationLog
-from pyauth.auth import HasRoleAndDataPermission
+from .models import TestResult, MachineAutomationLog, CreateHMSMILog
+from pyauth.auth import HasRolePermission
 from django.views.decorators.csrf import csrf_exempt
+import logging
 
+logger = logging.getLogger("hmsmi")
 
 @csrf_exempt
 @api_view(['POST'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def create_hmsmi(request):
+    logger.info("create_hmsmi API called")
+    logger.info("Request Method: %s", request.method)
+    logger.info("Request User: %s", getattr(request.user, "username", "Anonymous"))
+    logger.info("Request Data: %s", request.data)
+    
+    bill_number = request.data.get("BillNumber")
+    test_code = request.data.get("SubTestcode") or request.data.get("TestCode")
+
     try:
         serializer = HMSMISerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response({
+            response_data = {
                 'success': True,
                 'data': serializer.data,
-                'message': 'HMSMI data created successfully.'
-            }, status=status.HTTP_200_OK)
+                'message': 'Billdata Recevied successfully.'
+            }
+            #  Log success response
+            logger.info("create_hmsmi SUCCESS response: %s", response_data)
+            
+            # Save to DB Log
+            CreateHMSMILog.objects.create(
+                bill_number=bill_number,
+                test_code=test_code,
+                status="SUCCESS",
+                message="HMSMI data created successfully.",
+                request_data=json.dumps(request.data),
+                response_data=json.dumps(response_data)
+            )
+
+            return Response(response_data, status=status.HTTP_200_OK)
         else:
-            return Response({
+            response_data = {
                 'success': False,
                 'errors': serializer.errors,
                 'message': 'Validation failed.'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            }
+            #  Log validation error
+            logger.warning("create_hmsmi VALIDATION FAILED: %s", response_data)
+
+            # Save to DB Log
+            CreateHMSMILog.objects.create(
+                bill_number=bill_number,
+                test_code=test_code,
+                status="VALIDATION_FAILED",
+                message="HMSMI validation failed.",
+                request_data=json.dumps(request.data),
+                response_data=json.dumps(response_data)
+            )
+
+            return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
-        return Response({
+        response_data = {
             'success': False,
             'errors': str(e),
             'message': 'An unexpected error occurred.'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        }
+        #  Log exception with stack trace
+        logger.error("create_hmsmi EXCEPTION occurred", exc_info=True)
+
+        # Save to DB Log
+        CreateHMSMILog.objects.create(
+            bill_number=bill_number,
+            test_code=test_code,
+            status="ERROR",
+            message=f"Exception: {str(e)}",
+            request_data=json.dumps(request.data),
+            response_data=json.dumps(response_data)
+        )
+
+        return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 
