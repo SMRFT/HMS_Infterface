@@ -35,7 +35,7 @@ logger = logging.getLogger("hmsmi")
 
 @csrf_exempt
 @api_view(['POST'])
-@permission_classes([HasRolePermission])
+# @permission_classes([HasRolePermission])
 def create_hmsmi(request):
     logger.info("create_hmsmi API called")
     logger.info("Request Method: %s", request.method)
@@ -401,4 +401,5 @@ def post_test_results(request, bill_number):
         
 
     return Response(result, status=status.HTTP_200_OK)
+
 
