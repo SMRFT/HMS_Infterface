@@ -73,6 +73,13 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'HMSMachineInterface.wsgi.application'
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ]
+}
 
 
 # Password validation
@@ -98,7 +105,7 @@ import certifi
 DATABASES = {
     'default': {
         'ENGINE': 'djongo',
-        'NAME': "HMS-MachineInterface",
+        'NAME': "Diagnostics",
         'ENFORCE_SCHEMA': False,
         'CLIENT': {
 

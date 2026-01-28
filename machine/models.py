@@ -26,26 +26,31 @@ class HMSMI(models.Model):
 
 
 class TestResult(models.Model):
-    resultdate = models.DateField()                       # e.g., 2021-09-22
-    resulttime = models.TimeField()                       # e.g., 05:06:40
-    resultvalue = models.CharField(max_length=100)        # kept CharField in case it's not always numeric
-    billnumber = models.CharField(max_length=50)
-    billtype = models.CharField(max_length=20)
-    testcode = models.CharField(max_length=50)
-    subtestcode = models.CharField(max_length=50, blank=True, null=True)
-    serialnumber = models.IntegerField()
-    opnumber = models.CharField(max_length=50)
-    patientname = models.CharField(max_length=100)
-    patientage = models.IntegerField()
-    gender = models.CharField(max_length=10, choices=[
-        ("MALE", "Male"),
-        ("FEMALE", "Female"),
-        ("OTHER", "Other"),
-    ])
-
-    created_date = models.DateTimeField(auto_now_add=True)  # optional audit field
-    updated_date = models.DateTimeField(auto_now=True)
+    billnumber = models.CharField(max_length=100)
+    testcode = models.CharField(max_length=100)
+    subtestcode = models.CharField(max_length=100)
+    resultvalue = models.CharField(max_length=500)
+    resultdate = models.CharField(max_length=50, null=True, blank=True)
+    resulttime = models.CharField(max_length=50, null=True, blank=True)
+    billtype = models.CharField(max_length=100, null=True, blank=True)
+    serialnumber = models.CharField(max_length=100, null=True, blank=True)
+    opnumber = models.CharField(max_length=100, null=True, blank=True)
+    patientname = models.CharField(max_length=255, null=True, blank=True)
+    patientage = models.CharField(max_length=50, null=True, blank=True)
+    gender = models.CharField(max_length=50, null=True, blank=True)
+    status = models.TextField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.patientname} - {self.testcode} ({self.resultdate})"
+        return f"{self.billnumber} - {self.subtestcode}"
 
+
+class MachineAutomationLog(models.Model):
+    timestamp = models.DateTimeField(auto_now_add=True)
+    bill_number = models.CharField(max_length=100, null=True, blank=True)
+    test_code = models.CharField(max_length=100, null=True, blank=True)
+    status = models.CharField(max_length=50) # SUCCESS, ERROR, INFO, SKIPPED
+    message = models.TextField()
+    response_data = models.TextField(null=True, blank=True) # To store API response or detailed error
+
+    def __str__(self):
+        return f"{self.timestamp} - {self.bill_number}: {self.message}"
