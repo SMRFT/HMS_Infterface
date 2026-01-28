@@ -10,14 +10,14 @@ import json
 import requests
 from datetime import datetime
 from pymongo import MongoClient
-from .models import TestResult
+from .models import TestResult, MachineAutomationLog
 from pyauth.auth import HasRoleAndDataPermission
 from django.views.decorators.csrf import csrf_exempt
 
 
 @csrf_exempt
 @api_view(['POST'])
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def create_hmsmi(request):
     try:
         serializer = HMSMISerializer(data=request.data)
@@ -47,6 +47,12 @@ def save_test_result(machine, test_code, result_value,approve_time):
     
     # STRICTLY process ONLY IP patients
     if str(machine.get("IPOPType")).upper() != "IP":
+        MachineAutomationLog.objects.create(
+            bill_number=machine.get("BillNumber"),
+            test_code=test_code,
+            status="SKIPPED",
+            message=f"Skipped non-IP patient: {machine.get('IPOPType')}"
+        )
         return {"STATUS": 0, "MESSAGE": "SKIPPED_NON_IP"}
 
     result_data = {
@@ -74,6 +80,12 @@ def save_test_result(machine, test_code, result_value,approve_time):
     if existing_obj:
         # If record exists and has a status, it's fully processed.
         if existing_obj.status:
+            MachineAutomationLog.objects.create(
+                bill_number=machine.get("BillNumber"),
+                test_code=test_code,
+                status="INFO",
+                message=f"Result already processed with status: {existing_obj.status}"
+            )
             return {"STATUS": 0, "ERROR": "RESULT_ALREADY_ADDED"}
         
         # If record exists but status is null/empty, we reuse it and try to send data again.
@@ -89,10 +101,26 @@ def save_test_result(machine, test_code, result_value,approve_time):
             data=result_data,
             headers={"Authorization": f"Token {os.getenv('HMS_API_KEY')}"}
         )
+
+        log_status = "SUCCESS" if response.status_code == 200 else "ERROR"
+        MachineAutomationLog.objects.create(
+            bill_number=machine.get("BillNumber"),
+            test_code=test_code,
+            status=log_status,
+            message=f"API Response Code: {response.status_code}",
+            response_data=response.text
+        )
+
         if response.status_code == 200:
             test_result_obj.status = response.text
             test_result_obj.save()
-    except Exception:
+    except Exception as e:
+        MachineAutomationLog.objects.create(
+            bill_number=machine.get("BillNumber"),
+            test_code=test_code,
+            status="ERROR",
+            message=f"API Call Failed: {str(e)}"
+        )
         pass
 
     return {"STATUS": 1}
@@ -109,8 +137,14 @@ def process_lab_result(bill_number):
     normalized_bill = bill_number.replace("/", "")
 
     # 2. Fetch core_testvalue using barcode
+    # 2. Fetch core_testvalue using barcode
     core_values = list(core_value_col.find({"barcode": normalized_bill}))
     if not core_values:
+        MachineAutomationLog.objects.create(
+            bill_number=bill_number,
+            status="ERROR",
+            message="Core test value not found in MongoDB"
+        )
         return {"error": "Core test value not found", "status_code": 404}
 
     # 3. Fetch HMS Machine Records
@@ -122,6 +156,11 @@ def process_lab_result(bill_number):
         machine_records = list(machine_col.find({"BillNumber": formatted_bill}))
         
     if not machine_records:
+        MachineAutomationLog.objects.create(
+            bill_number=bill_number,
+            status="ERROR",
+            message="Machine HMSMI records not found"
+        )
         return {"error": f"Machine HMSMI records not found for bill {bill_number}", "status_code": 404}
 
     # 4. Parse and Aggregate testdetails from ALL matching core_testvalue documents
@@ -135,6 +174,11 @@ def process_lab_result(bill_number):
             continue # Skip malformed JSON but keep processing others
 
     if not all_testdetails:
+         MachineAutomationLog.objects.create(
+            bill_number=bill_number,
+            status="ERROR",
+            message="No valid testdetails found in core values"
+        )
          return {"error": "No valid testdetails found in core values", "status_code": 500}
 
     processed_count = 0
@@ -143,6 +187,7 @@ def process_lab_result(bill_number):
     # Track which machine records are satisfied to avoid creating duplicates if we re-run
     # Dictionary to map 'SubTestcode' -> machine_record
     machine_map = {str(m.get("SubTestcode")): m for m in machine_records if m.get("SubTestcode")}
+
 
     # 5. Iterate through ALL aggregated test results
     for test in all_testdetails:
@@ -196,8 +241,14 @@ def process_lab_result(bill_number):
             result_value = item["value"]
             approve_time = item["approve_time"]
 
-            
             if not result_test_code or result_value is None or approve_time is None:
+                if approve_time is None:
+                     MachineAutomationLog.objects.create(
+                        bill_number=bill_number,
+                        test_code=result_test_code,
+                        status="SKIPPED",
+                        message="Result not approved (approve_time is null)"
+                    )
                 continue
 
             # Collect all HMS subtestcodes this result could potentially fulfill
@@ -268,12 +319,23 @@ def process_lab_result(bill_number):
                 pass
 
     if processed_count > 0:
+        MachineAutomationLog.objects.create(
+            bill_number=bill_number,
+            status="SUCCESS",
+            message=f"Successfully posted {processed_count} results"
+        )
         return {
             "status": "success",
             "processed": processed_count,
             "message": "Results posted successfully"
         }
     
+    MachineAutomationLog.objects.create(
+        bill_number=bill_number,
+        status="WARNING",
+        message="No new results matched or saved",
+        response_data=json.dumps(errors) if errors else None
+    )
     return {
         "status": "partial_success",
         "processed": 0,

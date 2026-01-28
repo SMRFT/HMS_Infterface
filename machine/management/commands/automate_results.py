@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
 from machine.views import process_lab_result
+from machine.models import MachineAutomationLog
 from pymongo import MongoClient
 import os
 import time
@@ -20,7 +21,7 @@ class Command(BaseCommand):
         col = db.core_testvalue
         
         # Start checking from 1 hour ago (catch up on recent interruptions)
-        last_check_time = datetime.now() - timedelta(hours=148)
+        last_check_time = datetime.now() - timedelta(hours=1480)
         self.stdout.write(f"Starting automation loop. Monitoring core_testvalue for new results since {last_check_time}")
 
         while True:
@@ -70,4 +71,11 @@ class Command(BaseCommand):
                 
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"Error in automation loop: {str(e)}"))
+                try:
+                    MachineAutomationLog.objects.create(
+                        status="CRITICAL",
+                        message=f"Automation Loop Error: {str(e)}"
+                    )
+                except:
+                    pass
                 time.sleep(5)

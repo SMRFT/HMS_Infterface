@@ -43,3 +43,14 @@ class TestResult(models.Model):
     def __str__(self):
         return f"{self.billnumber} - {self.subtestcode}"
 
+
+class MachineAutomationLog(models.Model):
+    timestamp = models.DateTimeField(auto_now_add=True)
+    bill_number = models.CharField(max_length=100, null=True, blank=True)
+    test_code = models.CharField(max_length=100, null=True, blank=True)
+    status = models.CharField(max_length=50) # SUCCESS, ERROR, INFO, SKIPPED
+    message = models.TextField()
+    response_data = models.TextField(null=True, blank=True) # To store API response or detailed error
+
+    def __str__(self):
+        return f"{self.timestamp} - {self.bill_number}: {self.message}"
