@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-yp#p0aji4%2%##v6qq&9llh7vqkv3wik_mu%(1fwz$ryra@#u=
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
@@ -52,6 +52,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    
 ]
 
 ROOT_URLCONF = 'HMSMachineInterface.urls'
@@ -73,13 +74,6 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'HMSMachineInterface.wsgi.application'
-from rest_framework_simplejwt.authentication import JWTAuthentication
-
-REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-    ]
-}
 
 
 # Password validation
@@ -137,3 +131,50 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+CORS_ALLOW_HEADERS = [
+    "Authorization",
+    "Content-Type",
+]
+
+CORS_ALLOW_ALL_ORIGINS = True 
+
+
+import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+
+    "formatters": {
+        "verbose": {
+            "format": "[{asctime}] {levelname} {name} {message}",
+            "style": "{",
+        },
+    },
+
+    "handlers": {
+        "hmsmi_file": {
+            "level": "INFO",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": os.path.join(LOG_DIR, "hmsmi.log"),
+            "maxBytes": 5 * 1024 * 1024,
+            "backupCount": 5,
+            "formatter": "verbose",
+        },
+    },
+
+    "loggers": {
+        "hmsmi": {
+            "handlers": ["hmsmi_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
