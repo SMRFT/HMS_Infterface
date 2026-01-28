@@ -11,7 +11,7 @@ cleanup() {
 trap cleanup SIGINT
 
 echo "Starting Django Server..."
-python3 manage.py runserver &
+python3 manage.py runserver 0.0.0.0:1310 &
 
 echo "Starting Automation Worker..."
 python3 manage.py automate_results &
