@@ -7,7 +7,7 @@ import json
 import requests
 from datetime import datetime
 from pymongo import MongoClient
-from .models import TestResult, MachineAutomationLog, CreateHMSMILog
+from .models import TestResult, MachineAutomationLog
 from pyauth.auth import HasRolePermission
 from django.views.decorators.csrf import csrf_exempt
 import logging
@@ -401,5 +401,6 @@ def post_test_results(request, bill_number):
         
 
     return Response(result, status=status.HTTP_200_OK)
+
 
 
