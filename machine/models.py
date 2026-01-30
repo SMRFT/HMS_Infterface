@@ -10,7 +10,7 @@ class HMSMI(models.Model):
     mobilenumber = models.CharField(max_length=25)
     IPOPType = models.CharField(max_length=20) 
     IPOPNumber = models.CharField(max_length=50)
-    PatientTitle = models.CharField(max_length=10)  # e.g., Mr, Ms, Dr
+    PatientTitle = models.CharField(max_length=10, blank=True, null=True)  # e.g., Mr, Ms, Dr
     PatientName = models.CharField(max_length=100)
     PatientAge = models.IntegerField()
     Gender = models.CharField(max_length=10)   # e.g., Male / Female / Other
@@ -55,14 +55,4 @@ class MachineAutomationLog(models.Model):
     def __str__(self):
         return f"{self.timestamp} - {self.bill_number}: {self.message}"
 
-class CreateHMSMILog(models.Model):
-    timestamp = models.DateTimeField(auto_now_add=True)
-    bill_number = models.CharField(max_length=100, null=True, blank=True)
-    test_code = models.CharField(max_length=100, null=True, blank=True)
-    status = models.CharField(max_length=50) # SUCCESS, VALIDATION_FAILED, ERROR
-    message = models.TextField()
-    request_data = models.TextField(null=True, blank=True) # Store the incoming request data
-    response_data = models.TextField(null=True, blank=True) # Store the response sent back
 
-    def __str__(self):
-        return f"{self.timestamp} - {self.bill_number}: {self.status}"
