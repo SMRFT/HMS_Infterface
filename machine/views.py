@@ -195,6 +195,12 @@ def process_lab_result(bill_number):
         formatted_bill = f"{bill_number[:4]}/{bill_number[4:]}"
         machine_records = list(machine_col.find({"BillNumber": formatted_bill}))
         
+    # Fallback: validation for 12-digit bill number including BillType (e.g. 252624014369 -> 2526/014369 and BillType: 24)
+    if not machine_records and len(bill_number) == 12 and bill_number.isdigit():
+        formatted_bill = f"{bill_number[:4]}/{bill_number[6:]}"
+        bill_type = bill_number[4:6]
+        machine_records = list(machine_col.find({"BillNumber": formatted_bill, "BillType": bill_type}))
+        
     if not machine_records:
         MachineAutomationLog.objects.create(
             bill_number=bill_number,
