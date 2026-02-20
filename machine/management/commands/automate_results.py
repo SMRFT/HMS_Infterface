@@ -21,7 +21,7 @@ class Command(BaseCommand):
         col = db.core_testvalue
         
         # Start checking from 1 hour ago (catch up on recent interruptions)
-        last_check_time = datetime.now() - timedelta(hours=1480)
+        last_check_time = datetime.now() - timedelta(hours=300)
         self.stdout.write(f"Starting automation loop. Monitoring core_testvalue for new results since {last_check_time}")
 
         while True:
