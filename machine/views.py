@@ -1,3 +1,4 @@
+from django.shortcuts import render
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
@@ -7,30 +8,34 @@ import json
 import requests
 from datetime import datetime
 from pymongo import MongoClient
-from .models import TestResult, MachineAutomationLog
+from .models import TestResult, MachineAutomationLog, ManualEntryLog
 from pyauth.auth import HasRolePermission
 from django.views.decorators.csrf import csrf_exempt
 import logging
-
-import os
-import json
-import requests
-import logging
-
-from datetime import datetime
-from pymongo import MongoClient
-
-from django.views.decorators.csrf import csrf_exempt
-
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.response import Response
-from rest_framework import status
-
-from .serializers import HMSMISerializer
-from .models import TestResult
-from pyauth.auth import HasRolePermission
 
 logger = logging.getLogger("hmsmi")
+
+
+def log_result_action(bill_number, test_code, status, message, response_data=None, is_manual=False):
+    """Helper to log actions to the appropriate database tables."""
+    # Always log to the automation log for overall visibility
+    MachineAutomationLog.objects.create(
+        bill_number=bill_number,
+        test_code=test_code,
+        status=status,
+        message=message,
+        response_data=json.dumps(response_data) if response_data and not isinstance(response_data, str) else response_data
+    )
+    
+    # If manual, also log to the manual entry log
+    if is_manual:
+        ManualEntryLog.objects.create(
+            bill_number=bill_number,
+            test_code=test_code,
+            status=status,
+            message=message,
+            response_payload=json.dumps(response_data) if response_data and not isinstance(response_data, str) else response_data
+        )
 
 
 @csrf_exempt
@@ -47,15 +52,18 @@ def create_hmsmi(request):
 
         if serializer.is_valid():
             serializer.save()
+            
+            # Auto-process the bill after receiving data
+            bill_number = request.data.get('BillNumber')
+            bill_type = request.data.get('BillType')
+            if bill_number:
+                process_lab_result(bill_number, is_manual=False, bill_type=bill_type)
 
             response_data = {
                 'success': True,
                 'data': serializer.data,
-                'message': 'Bill data received successfully.'
+                'message': 'Bill data received and processing initiated.'
             }
-
-            # Log success response
-            logger.info("create_hmsmi SUCCESS response: %s", response_data)
             return Response(response_data, status=status.HTTP_200_OK)
 
         else:
@@ -81,17 +89,16 @@ def create_hmsmi(request):
         return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-
-
-def save_test_result(machine, test_code, result_value,approve_time):
+def save_test_result(machine, test_code, sub_test_code, result_value, approve_time, is_manual=False):
     
-    # STRICTLY process ONLY IP patients
-    if str(machine.get("IPOPType")).upper() != "IP":
-        MachineAutomationLog.objects.create(
+    # STRICTLY process ONLY IP patients for automatic automation, allow manual overrides
+    if not is_manual and str(machine.get("IPOPType")).upper() != "IP":
+        log_result_action(
             bill_number=machine.get("BillNumber"),
             test_code=test_code,
             status="SKIPPED",
-            message=f"Skipped non-IP patient: {machine.get('IPOPType')}"
+            message=f"Skipped non-IP patient: {machine.get('IPOPType')}",
+            is_manual=is_manual
         )
         return {"STATUS": 0, "MESSAGE": "SKIPPED_NON_IP"}
 
@@ -102,7 +109,7 @@ def save_test_result(machine, test_code, result_value,approve_time):
         "billnumber": machine.get("BillNumber"),
         "billtype": machine.get("BillType"),
         "testcode": test_code,
-        "subtestcode": machine.get("SubTestcode"),
+        "subtestcode": sub_test_code, # Use the passed sub_test_code
         "serialnumber": machine.get("SerialNumber"),
         "opnumber": machine.get("IPOPNumber") or machine.get("OPNumber"),
         "patientname": machine.get("PatientName"),
@@ -110,32 +117,26 @@ def save_test_result(machine, test_code, result_value,approve_time):
         "gender": machine.get("Gender")
     }
 
-    # Check for existing record
+    # Check for existing record in TestResult model
     existing_obj = TestResult.objects.filter(
         billnumber=machine.get("BillNumber"),
         testcode=test_code,
-        subtestcode=machine.get("SubTestcode")
+        subtestcode=sub_test_code
     ).first()
 
     if existing_obj:
-        # If record exists and has a status, it's fully processed.
-        if existing_obj.status:
-            MachineAutomationLog.objects.create(
-                bill_number=machine.get("BillNumber"),
-                test_code=test_code,
-                status="INFO",
-                message=f"Result already processed with status: {existing_obj.status}"
-            )
+        if existing_obj.status and "SUCCESS" in str(existing_obj.status).upper():
             return {"STATUS": 0, "ERROR": "RESULT_ALREADY_ADDED"}
-        
-        # If record exists but status is null/empty, we reuse it and try to send data again.
         test_result_obj = existing_obj
+        # Update existing object fields
+        for key, value in result_data.items():
+            setattr(test_result_obj, key, value)
+        test_result_obj.save()
     else:
-        # Create new record
         test_result_obj = TestResult.objects.create(**result_data)
 
-    # Since we already checked for IP above, we can just proceed with sending
     try:
+        # 1. Update the HMS API
         response = requests.post(
             "http://156.67.110.232:8019/lab-api/save-lab-result-data/",
             data=result_data,
@@ -143,29 +144,56 @@ def save_test_result(machine, test_code, result_value,approve_time):
         )
 
         log_status = "SUCCESS" if response.status_code == 200 else "ERROR"
-        MachineAutomationLog.objects.create(
+        log_result_action(
             bill_number=machine.get("BillNumber"),
             test_code=test_code,
             status=log_status,
             message=f"API Response Code: {response.status_code}",
-            response_data=response.text
+            response_data=response.text,
+            is_manual=is_manual
         )
 
         if response.status_code == 200:
             test_result_obj.status = response.text
             test_result_obj.save()
+            
+            # 2. ALSO update the local machine_hmsmi collection in MongoDB
+            try:
+                client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+                db = client['Diagnostics']
+                machine_col = db['machine_hmsmi']
+                
+                # Update based on the original machine record's ID to be precise
+                machine_col.update_one(
+                    {"_id": machine.get("_id")},
+                    {"$set": {
+                        "resultvalue": str(result_value),
+                        "resultdate": result_data["resultdate"],
+                        "resulttime": result_data["resulttime"],
+                        "testcode": test_code,
+                        "subtestcode": sub_test_code,
+                        "status": '{"STATUS":1}'
+                    }}
+                )
+                client.close()
+            except Exception as mongo_err:
+                logger.error(f"Failed to update machine_hmsmi: {str(mongo_err)}")
+                
+            return {"STATUS": 1, "MESSAGE": "SUCCESS"}
+        else:
+            return {"STATUS": 0, "ERROR": "API_ERROR", "DETAILS": response.text}
+
     except Exception as e:
-        MachineAutomationLog.objects.create(
+        log_result_action(
             bill_number=machine.get("BillNumber"),
             test_code=test_code,
-            status="ERROR",
-            message=f"API Call Failed: {str(e)}"
+            status="EXCEPTION",
+            message=str(e),
+            is_manual=is_manual
         )
-        pass
+        return {"STATUS": 0, "ERROR": str(e)}
 
-    return {"STATUS": 1}
-
-def process_lab_result(bill_number):
+def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_filter=None):
     mongo_url = os.getenv("GLOBAL_DB_HOST")
     client = MongoClient(mongo_url)
     db = client.Diagnostics
@@ -173,22 +201,11 @@ def process_lab_result(bill_number):
     core_value_col = db.core_testvalue
     core_detail_col = db.core_testdetails
 
-    # 1. Normalize Bill Number (remove /)
-    normalized_bill = bill_number.replace("/", "")
-
-    # 2. Fetch core_testvalue using barcode
-    # 2. Fetch core_testvalue using barcode
-    core_values = list(core_value_col.find({"barcode": normalized_bill}))
-    if not core_values:
-        MachineAutomationLog.objects.create(
-            bill_number=bill_number,
-            status="ERROR",
-            message="Core test value not found in MongoDB"
-        )
-        return {"error": "Core test value not found", "status_code": 404}
-
-    # 3. Fetch HMS Machine Records
-    machine_records = list(machine_col.find({"BillNumber": bill_number}))
+    # 1. Fetch HMS Machine Records (to get BillType if needed)
+    query = {"BillNumber": bill_number}
+    if bill_type and str(bill_type).lower() != "null":
+        query["BillType"] = str(bill_type)
+    machine_records = list(machine_col.find(query))
     
     # Fallback: validation for missing slash in bill number (e.g. 2526014369 -> 2526/014369)
     if not machine_records and len(bill_number) == 10 and bill_number.isdigit():
@@ -198,16 +215,41 @@ def process_lab_result(bill_number):
     # Fallback: validation for 12-digit bill number including BillType (e.g. 252624014369 -> 2526/014369 and BillType: 24)
     if not machine_records and len(bill_number) == 12 and bill_number.isdigit():
         formatted_bill = f"{bill_number[:4]}/{bill_number[6:]}"
-        bill_type = bill_number[4:6]
-        machine_records = list(machine_col.find({"BillNumber": formatted_bill, "BillType": bill_type}))
+        bill_type_from_input = bill_number[4:6]
+        machine_records = list(machine_col.find({"BillNumber": formatted_bill, "BillType": bill_type_from_input}))
         
     if not machine_records:
-        MachineAutomationLog.objects.create(
+        log_result_action(
             bill_number=bill_number,
+            test_code=None,
             status="ERROR",
-            message="Machine HMSMI records not found"
+            message="Machine HMSMI records not found",
+            is_manual=is_manual
         )
         return {"error": f"Machine HMSMI records not found for bill {bill_number}", "status_code": 404}
+
+    # 2. Get BillType from machine records for barcode fallback
+    primary_machine_rec = machine_records[0]
+    bill_type = primary_machine_rec.get("BillType")
+
+    # 3. Fetch core_testvalue using barcode
+    normalized_bill = bill_number.replace("/", "")
+    core_values = list(core_value_col.find({"barcode": normalized_bill}))
+    
+    # Fallback: Check if core_testvalue barcode includes BillType (e.g. 2526 + 24 + 014369)
+    if not core_values and bill_type and len(normalized_bill) == 10:
+        extended_barcode = f"{normalized_bill[:4]}{bill_type}{normalized_bill[4:]}"
+        core_values = list(core_value_col.find({"barcode": extended_barcode}))
+
+    if not core_values:
+        log_result_action(
+            bill_number=bill_number,
+            test_code=None,
+            status="ERROR",
+            message="Core test value not found in MongoDB (Checked both normal and extended barcodes)",
+            is_manual=is_manual
+        )
+        return {"error": "Core test value not found", "status_code": 404}
 
     # 4. Parse and Aggregate testdetails from ALL matching core_testvalue documents
     all_testdetails = []
@@ -215,29 +257,46 @@ def process_lab_result(bill_number):
         try:
             details = json.loads(cv["testdetails"])
             if isinstance(details, list):
+                # Filter by test_code if provided
+                if test_code_filter:
+                    # Robust filtering: check multiple possible identifying fields
+                    details = [
+                        t for t in details 
+                        if str(t.get('test_code') or t.get('testname') or t.get('name') or t.get('test_id')) == str(test_code_filter)
+                    ]
                 all_testdetails.extend(details)
         except (TypeError, json.JSONDecodeError):
             continue # Skip malformed JSON but keep processing others
 
     if not all_testdetails:
-         MachineAutomationLog.objects.create(
+        log_result_action(
             bill_number=bill_number,
+            test_code=None,
             status="ERROR",
-            message="No valid testdetails found in core values"
+            message="No valid testdetails found in core values",
+            is_manual=is_manual
         )
-         return {"error": "No valid testdetails found in core values", "status_code": 500}
+        return {"error": "No valid testdetails found in core values", "status_code": 500}
 
     processed_count = 0
     errors = []
     
-    # Track which machine records are satisfied to avoid creating duplicates if we re-run
-    # Dictionary to map 'SubTestcode' -> machine_record
-    machine_map = {str(m.get("SubTestcode")): m for m in machine_records if m.get("SubTestcode")}
+    # 5. Build machine_map: map potential identifiers to machine records
+    machine_map = {}
+    for m in machine_records:
+        st_code = str(m.get("SubTestcode") or "").strip()
+        t_code = str(m.get("TestCode") or "").strip()
+        st_name = str(m.get("SubTestName") or "").strip()
+        
+        if st_code: machine_map[st_code] = m
+        if t_code: machine_map[t_code] = m
+        if st_name: machine_map[st_name] = m # Fallback to name match if codes fail
 
 
     # 5. Iterate through ALL aggregated test results
     for test in all_testdetails:
-        test_id = test.get("test_id")
+        # Try to get test_id from multiple possible locations
+        test_id = test.get("test_id") or test.get("id")
         if not test_id:
             continue
 
@@ -270,30 +329,34 @@ def process_lab_result(bill_number):
             for p in test["parameters"]:
                 result_items.append({
                     "test_code": p.get("test_code"),
-                    "value": p.get("value"),
+                    "test_name": p.get("test_name") or p.get("name") or p.get("testname"),
+                    "value": p.get("value") or p.get("result"),
                     "approve_time": approve_time_dt
                 })
         else:
             # Flat result (Single value)
             result_items.append({
                 "test_code": test.get("test_code"),
-                "value": test.get("value"),
+                "test_name": test.get("test_name") or test.get("testname") or test.get("name"),
+                "value": test.get("value") or test.get("result"),
                 "approve_time": approve_time_dt
             })
 
         # Process each result item against the master
         for item in result_items:
             result_test_code = item["test_code"]
+            result_test_name = item["test_name"]
             result_value = item["value"]
             approve_time = item["approve_time"]
 
-            if not result_test_code or result_value is None or approve_time is None:
-                if approve_time is None:
-                     MachineAutomationLog.objects.create(
+            if (not result_test_code and not result_test_name) or result_value is None or approve_time is None:
+                if approve_time is None and (result_test_code or result_test_name):
+                     log_result_action(
                         bill_number=bill_number,
-                        test_code=result_test_code,
+                        test_code=result_test_code or result_test_name,
                         status="SKIPPED",
-                        message="Result not approved (approve_time is null)"
+                        message="Result not approved (approve_time is null)",
+                        is_manual=is_manual
                     )
                 continue
 
@@ -311,7 +374,7 @@ def process_lab_result(bill_number):
             
             for p in master_params:
                 # Match result to master parameter by test_code
-                if str(p.get("test_code")) == str(result_test_code):
+                if str(p.get("test_code") or p.get("test_name") or p.get("name")) == str(result_test_code):
                     sub_code = p.get("hms_subtestcode")
                     if sub_code and str(sub_code) != "0":
                         potential_hms_codes.add(str(sub_code))
@@ -321,12 +384,6 @@ def process_lab_result(bill_number):
                     potential_hms_codes.add(str(result_test_code))
 
             # B. Main Test Code Match 
-            # Note: Only apply main test code if this result item actually "belongs" to the main test
-            # If we are processing a sub-parameter, does it fulfill the main test request?
-            # Typically yes, if the machine requested the Group Code, any constituent part is relevant.
-            # But usually we save the SPECIFIC result. 
-            # If the user asks for "Electrolytes" (Group), they get 4 results.
-            # We check if the BILL requests the Group Code.
             main_code = test_master.get("hms_testcode")
             if main_code and str(main_code) != "0":
                  potential_hms_codes.add(str(main_code))
@@ -338,6 +395,14 @@ def process_lab_result(bill_number):
                  if sub_code and str(sub_code) != "0":
                      potential_hms_codes.add(str(sub_code))
 
+            # D. Direct Match from Analyzer Code (Fallback)
+            if result_test_code:
+                potential_hms_codes.add(str(result_test_code))
+            
+            # E. Name Match (Fallback)
+            if result_test_name:
+                potential_hms_codes.add(str(result_test_name))
+            
             # If we have no candidates, skip
             if not potential_hms_codes:
                 continue
@@ -348,27 +413,37 @@ def process_lab_result(bill_number):
                 machine_record = machine_map.get(str(hms_code))
                 if machine_record:
                     # 8. Save Result
-                    # User requested 'hsmtestcode' (hms_testcode) to be saved as testcode
                     hms_main_testcode = test_master.get("hms_testcode")
                     
+                    # Try to find the specific sub-code from master if we matched a parameter
+                    final_sub_code = machine_record.get("SubTestcode")
+                    for p in master_params:
+                        if str(p.get("hms_subtestcode")) == str(hms_code):
+                            final_sub_code = hms_code
+                            break
+
                     save_resp = save_test_result(
                         machine=machine_record,
                         test_code=hms_main_testcode, 
+                        sub_test_code=final_sub_code, # Pass specifically
                         result_value=result_value,
-                        approve_time=approve_time
+                        approve_time=approve_time,
+                        is_manual=is_manual
                     )
                     if save_resp.get("STATUS") == 1:
                         processed_count += 1
-                    match_found = True
+                        match_found = True
             
             if not match_found:
-                pass
+                errors.append(f"No matching machine record for test {result_test_code} (Checked codes: {potential_hms_codes})")
 
     if processed_count > 0:
-        MachineAutomationLog.objects.create(
+        log_result_action(
             bill_number=bill_number,
+            test_code=None,
             status="SUCCESS",
-            message=f"Successfully posted {processed_count} results"
+            message=f"Successfully posted {processed_count} results",
+            is_manual=is_manual
         )
         return {
             "status": "success",
@@ -376,11 +451,13 @@ def process_lab_result(bill_number):
             "message": "Results posted successfully"
         }
     
-    MachineAutomationLog.objects.create(
+    log_result_action(
         bill_number=bill_number,
+        test_code=None,
         status="WARNING",
         message="No new results matched or saved",
-        response_data=json.dumps(errors) if errors else None
+        response_data={"debug_errors": errors},
+        is_manual=is_manual
     )
     return {
         "status": "partial_success",
@@ -388,6 +465,7 @@ def process_lab_result(bill_number):
         "message": "No new results matched or saved.",
         "debug_errors": errors
     }
+
 
 @api_view(['POST', 'GET'])
 def post_test_results(request, bill_number):
@@ -409,4 +487,149 @@ def post_test_results(request, bill_number):
     return Response(result, status=status.HTTP_200_OK)
 
 
+@api_view(['GET'])
+def manual_entry_page(request):
+    # Fetch recent manual logs
+    logs = ManualEntryLog.objects.all().order_by('-timestamp')[:50]
+    return render(request, 'manual_entry.html', {'logs': logs})
 
+@api_view(['POST'])
+def send_manual_result(request):
+    bill_number = request.data.get('bill_number')
+    bill_type = request.data.get('bill_type')
+    test_code = request.data.get('test_code') # Optional specific test
+    if not bill_number:
+        return Response({"error": "Bill number is required"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        # Process the result with optional filters
+        result = process_lab_result(bill_number, is_manual=True, bill_type=bill_type, test_code_filter=test_code)
+        return Response(result, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        log_result_action(
+            bill_number=bill_number,
+            test_code=None,
+            status="ERROR",
+            message=f"Manual Processing Exception: {str(e)}",
+            is_manual=True
+        )
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+def search_machine_records(request):
+    query = request.GET.get('q', '')
+    if len(query) < 2:
+        return Response([], status=status.HTTP_200_OK)
+    
+    try:
+        mongo_url = os.getenv("GLOBAL_DB_HOST")
+        client = MongoClient(mongo_url)
+        db = client.Diagnostics
+        col = db.machine_hmsmi
+        
+        # Search by BillNumber, IPOPNumber, or PatientName
+        search_filter = {
+            "$or": [
+                {"BillNumber": {"$regex": query, "$options": "i"}},
+                {"IPOPNumber": {"$regex": query, "$options": "i"}},
+                {"PatientName": {"$regex": query, "$options": "i"}}
+            ]
+        }
+        
+        # Aggregate to get unique BillNumber + BillType combinations
+        pipeline = [
+            {"$match": search_filter},
+            {"$group": {
+                "_id": {
+                    "BillNumber": "$BillNumber",
+                    "BillType": "$BillType"
+                },
+                "BillNumber": {"$first": "$BillNumber"},
+                "BillType": {"$first": "$BillType"},
+                "PatientName": {"$first": "$PatientName"},
+                "IPOPNumber": {"$first": "$IPOPNumber"}
+            }},
+            {"$limit": 10}
+        ]
+        
+        results = list(col.aggregate(pipeline))
+        
+        formatted = []
+        for r in results:
+            formatted.append({
+                "bill_number": r.get("BillNumber"),
+                "bill_type": r.get("BillType"),
+                "patient_name": r.get("PatientName"),
+                "op_number": r.get("IPOPNumber")
+            })
+            
+        return Response(formatted, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+@api_view(['POST'])
+def fetch_test_data(request):
+    bill_number = request.data.get('bill_number')
+    bill_type = request.data.get('bill_type')
+    
+    if not bill_number:
+        return Response({"error": "Bill number is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        mongo_url = os.getenv("GLOBAL_DB_HOST")
+        client = MongoClient(mongo_url)
+        db = client.Diagnostics
+        machine_col = db.machine_hmsmi
+        core_value_col = db.core_testvalue
+        
+        # 1. Normalize and handle 12-digit Barcodes
+        barcode_query = bill_number.replace("/", "")
+        actual_bill = bill_number
+        actual_type = bill_type
+
+        if len(barcode_query) == 12 and barcode_query.isdigit():
+            actual_bill = f"{barcode_query[:4]}/{barcode_query[6:]}"
+            actual_type = barcode_query[4:6]
+            if not bill_type or str(bill_type).lower() == "null":
+                bill_type = actual_type
+        
+        # Use parsed bill number for machine lookup
+        query = {"BillNumber": actual_bill}
+        if bill_type and str(bill_type).lower() != "null":
+            query["BillType"] = str(bill_type)
+        
+        machine_rec = machine_col.find_one(query)
+        final_bill_type = bill_type or (machine_rec.get("BillType") if machine_rec else None)
+        
+        # 2. Search for results in core_testvalue using the original barcode
+        core_values = list(core_value_col.find({"barcode": barcode_query}))
+        
+        # Fallback for extended barcode
+        if not core_values and final_bill_type and len(barcode_query) == 10:
+            extended_barcode = f"{barcode_query[:4]}{final_bill_type}{barcode_query[4:]}"
+            core_values = list(core_value_col.find({"barcode": extended_barcode}))
+            
+        # 3. Extract test details
+        all_tests = []
+        for cv in core_values:
+            try:
+                details = json.loads(cv.get("testdetails", "[]"))
+                if isinstance(details, list):
+                    all_tests.extend(details)
+            except:
+                continue
+                
+        return Response({
+            "patient_name": machine_rec.get("PatientName") if machine_rec else "Unknown",
+            "bill_number": bill_number,
+            "bill_type": final_bill_type,
+            "tests": all_tests
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

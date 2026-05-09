@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manual Result Entry | HMS Machine Interface</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #00d2ff;
+            --secondary: #3a7bd5;
+            --bg-dark: #0f172a;
+            --glass: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --success: #10b981;
+            --error: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background: radial-gradient(circle at top right, #1e293b, #0f172a);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            animation: fadeIn 0.8s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .glass-card {
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 3rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(to right, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            font-size: 1rem;
+        }
+
+        .input-group {
+            position: relative;
+            margin-bottom: 2rem;
+        }
+
+        input {
+            width: 100%;
+            padding: 1.25rem 1.5rem;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            color: white;
+            font-size: 1.1rem;
+            transition: all 0.3s ease;
+            outline: none;
+        }
+
+        input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(0, 210, 255, 0.1);
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .btn-send {
+            width: 100%;
+            padding: 1.25rem;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border: none;
+            border-radius: 12px;
+            color: white;
+            font-weight: 600;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .btn-send:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px -5px rgba(58, 123, 213, 0.5);
+            filter: brightness(1.1);
+        }
+
+        .btn-send:active {
+            transform: translateY(0);
+        }
+
+        .btn-send:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loader {
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s linear infinite;
+            display: none;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .logs-section {
+            margin-top: 4rem;
+        }
+
+        .logs-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .logs-header h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .log-table-container {
+            overflow-x: auto;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            padding: 1rem 1.5rem;
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        td {
+            padding: 1rem 1.5rem;
+            border-top: 1px solid var(--glass-border);
+            font-size: 0.95rem;
+        }
+
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .badge-success { background: rgba(16, 185, 129, 0.1); color: var(--success); }
+        .badge-error { background: rgba(239, 68, 68, 0.1); color: var(--error); }
+        .badge-warning { background: rgba(245, 158, 11, 0.1); color: var(--warning); }
+
+        .time { color: var(--text-muted); font-size: 0.875rem; }
+
+        #toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1rem 2rem;
+            border-radius: 12px;
+            background: #1e293b;
+            color: white;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            display: none;
+            animation: slideIn 0.3s ease-out;
+            z-index: 1000;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+
+        /* Autocomplete Styles */
+        .search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: #1e293b;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            margin-top: 0.5rem;
+            max-height: 300px;
+            overflow-y: auto;
+            z-index: 100;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            display: none;
+        }
+
+        .search-item {
+            padding: 1rem 1.5rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        .search-item:last-child {
+            border-bottom: none;
+        }
+
+        .search-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+            padding-left: 1.75rem;
+        }
+
+        .search-item .name {
+            font-weight: 600;
+            display: block;
+            margin-bottom: 0.25rem;
+        }
+
+        .search-item .meta {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="glass-card">
+            <header>
+                <h1>Manual Entry</h1>
+                <p class="subtitle">Search Patient / OP Number / Bill Number</p>
+            </header>
+
+            <div class="input-group">
+                <input type="text" id="billNumber" placeholder="Type to search..." autocomplete="off" autofocus>
+                <div class="search-results" id="searchResults"></div>
+            </div>
+
+            <button class="btn-send" id="sendBtn" onclick="previewResult()">
+                <span class="loader" id="loader"></span>
+                <span id="btnText">Fetch Available Results</span>
+            </button>
+
+            <!-- Preview Section -->
+            <div id="testDataCard" style="display: none; margin-top: 2rem; border-top: 1px solid var(--glass-border); padding-top: 2rem;">
+                <h3 style="margin-bottom: 1.5rem; font-size: 1.25rem;">Available Results for: <span id="patientNameDisplay" style="color: var(--primary);"></span></h3>
+                <div class="log-table-container" style="max-height: 400px; overflow-y: auto;">
+                    <table style="width: 100%;">
+                        <thead>
+                            <tr>
+                                <th>Test Code</th>
+                                <th>Value</th>
+                                <th style="text-align: right;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="testDataBody"></tbody>
+                    </table>
+                </div>
+                <div style="margin-top: 1.5rem; display: flex; justify-content: flex-end;">
+                    <button class="btn-send" style="width: auto; padding: 0.75rem 2rem;" onclick="processAllResults()">Process All Results</button>
+                </div>
+            </div>
+
+            <div class="logs-section">
+                <div class="logs-header">
+                    <h2>Recent Manual Entries</h2>
+                    <span class="time">Last 50 records</span>
+                </div>
+                <div class="log-table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Bill Number</th>
+                                <th>Test Code</th>
+                                <th>Status</th>
+                                <th>Message</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logBody">
+                            {% for log in logs %}
+                            <tr>
+                                <td class="time">{{ log.timestamp|date:"d/m/Y H:i:s" }}</td>
+                                <td style="font-weight: 500;">{{ log.bill_number }}</td>
+                                <td style="color: var(--primary);">{{ log.test_code|default:"-" }}</td>
+                                <td>
+                                    <span class="badge {% if log.status == 'SUCCESS' %}badge-success{% elif log.status == 'ERROR' %}badge-error{% else %}badge-warning{% endif %}">
+                                        {{ log.status }}
+                                    </span>
+                                </td>
+                                <td class="time">{{ log.message }}</td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" style="text-align: center; color: var(--text-muted);">No manual logs found</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <script>
+        const input = document.getElementById('billNumber');
+        const btn = document.getElementById('sendBtn');
+        const btnText = document.getElementById('btnText');
+        const loader = document.getElementById('loader');
+        const toast = document.getElementById('toast');
+        const searchResults = document.getElementById('searchResults');
+
+        let debounceTimer;
+        let selectedBillType = null;
+
+        // Handle typing for search
+        input.addEventListener('input', function() {
+            clearTimeout(debounceTimer);
+            const query = this.value.trim();
+            
+            if (query.length < 2) {
+                searchResults.style.display = 'none';
+                return;
+            }
+
+            debounceTimer = setTimeout(() => {
+                fetchSearchResults(query);
+            }, 300);
+        });
+
+        async function fetchSearchResults(query) {
+            try {
+                const response = await fetch(`/manual-entry/search/?q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+                
+                if (data.length > 0) {
+                    renderSearchResults(data);
+                } else {
+                    searchResults.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+            }
+        }
+
+        function renderSearchResults(results) {
+            searchResults.innerHTML = '';
+            results.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'search-item';
+                div.innerHTML = `
+                    <span class="name">${item.patient_name}</span>
+                    <span class="meta">${item.bill_number} | Type: ${item.bill_type} | OP: ${item.op_number}</span>
+                `;
+                div.onclick = () => {
+                    input.value = item.bill_number;
+                    selectedBillType = item.bill_type;
+                    searchResults.style.display = 'none';
+                    previewResult(); // Switch to preview
+                };
+                searchResults.appendChild(div);
+            });
+            searchResults.style.display = 'block';
+        }
+
+        // Close search results when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!input.contains(e.target) && !searchResults.contains(e.target)) {
+                searchResults.style.display = 'none';
+            }
+        });
+
+        // Handle Enter key
+        input.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                previewResult();
+            }
+        });
+
+        async function previewResult() {
+            const billNumber = input.value.trim();
+            if (!billNumber) {
+                showToast('Please enter a bill number', 'error');
+                return;
+            }
+
+            btn.disabled = true;
+            btnText.innerText = 'Searching Results...';
+            loader.style.display = 'block';
+            document.getElementById('testDataCard').style.display = 'none';
+
+            try {
+                const response = await fetch('/manual-entry/fetch-test-data/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({ 
+                        bill_number: billNumber,
+                        bill_type: selectedBillType 
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    if (data.tests.length === 0) {
+                        showToast('No results found in core test values', 'warning');
+                    } else {
+                        renderTestData(data);
+                    }
+                } else {
+                    showToast(data.error || 'Failed to fetch results', 'error');
+                }
+            } catch (error) {
+                showToast('Network error occurred', 'error');
+            } finally {
+                btn.disabled = false;
+                btnText.innerText = 'Fetch Available Results';
+                loader.style.display = 'none';
+            }
+        }
+
+        function renderTestData(data) {
+            const card = document.getElementById('testDataCard');
+            const nameDisplay = document.getElementById('patientNameDisplay');
+            const body = document.getElementById('testDataBody');
+            
+            nameDisplay.innerText = data.patient_name;
+            body.innerHTML = '';
+            
+            data.tests.forEach(test => {
+                // Handle different possible key names for robustness
+                const testCode = test.test_code || test.testname || test.name || test.test_id || 'N/A';
+                const testValue = test.value || test.result || (test.parameters ? `${test.parameters.length} params` : 'No Value');
+                const deviceId = test.device_id || 'N/A';
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>
+                        <div style="font-weight: 600;">${testCode}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">${deviceId}</div>
+                    </td>
+                    <td>${testValue}</td>
+                    <td style="text-align: right;">
+                        <button class="btn-send" style="width: auto; padding: 0.5rem 1rem; font-size: 0.85rem;" 
+                                onclick="sendIndividualTest('${data.bill_number}', '${data.bill_type}', '${testCode}', this)">
+                            Send
+                        </button>
+                    </td>
+                `;
+                body.appendChild(tr);
+            });
+            
+            card.style.display = 'block';
+            card.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        async function sendIndividualTest(billNumber, billType, testCode, btnElement) {
+            const originalText = btnElement.innerText;
+            btnElement.disabled = true;
+            btnElement.innerText = '...';
+
+            try {
+                const response = await fetch('/manual-entry/send/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({ 
+                        bill_number: billNumber,
+                        bill_type: billType,
+                        test_code: testCode
+                    })
+                });
+
+                const result = await response.json();
+                if (response.ok && result.status === 'success') {
+                    showToast(`Successfully processed: ${testCode}`, 'success');
+                    btnElement.innerText = 'Sent';
+                    btnElement.style.background = 'rgba(16, 185, 129, 0.2)';
+                    btnElement.style.color = '#10b981';
+                } else {
+                    showToast(result.error || result.message || 'Failed to send', 'error');
+                    btnElement.disabled = false;
+                    btnElement.innerText = originalText;
+                }
+            } catch (error) {
+                showToast('Network error', 'error');
+                btnElement.disabled = false;
+                btnElement.innerText = originalText;
+            }
+        }
+
+        async function processAllResults() {
+            const billNumber = input.value.trim();
+            // Reuse the existing multi-process logic but with better feedback
+            // For now, I'll just trigger the main send logic
+            processResult();
+        }
+
+        async function processResult() {
+            const billNumber = input.value.trim();
+            if (!billNumber) {
+                showToast('Please enter a bill number', 'error');
+                return;
+            }
+
+            // UI State: Loading
+            btn.disabled = true;
+            btnText.innerText = 'Processing...';
+            loader.style.display = 'block';
+            searchResults.style.display = 'none';
+
+            try {
+                const response = await fetch('/manual-entry/send/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({ 
+                        bill_number: billNumber,
+                        bill_type: selectedBillType
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    if (result.status === 'success') {
+                        showToast(`Successfully processed: ${result.processed} items`, 'success');
+                        input.value = '';
+                        setTimeout(() => location.reload(), 1500);
+                    } else {
+                        showToast(result.message || 'Partial success or warning', 'warning');
+                        selectedBillType = null; // Reset
+                        setTimeout(() => location.reload(), 2000);
+                    }
+                } else {
+                    showToast(result.error || 'Failed to process', 'error');
+                    selectedBillType = null; // Reset
+                }
+            } catch (error) {
+                showToast('Network error occurred', 'error');
+                console.error(error);
+            } finally {
+                btn.disabled = false;
+                btnText.innerText = 'Send to HMS';
+                loader.style.display = 'none';
+            }
+        }
+
+        function showToast(message, type) {
+            toast.innerText = message;
+            toast.style.display = 'block';
+            toast.style.background = type === 'success' ? '#065f46' : type === 'error' ? '#991b1b' : '#92400e';
+            
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3000);
+        }
+
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+    </script>
+</body>
+</html>
