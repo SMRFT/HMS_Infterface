@@ -377,7 +377,7 @@
 
         async function fetchSearchResults(query) {
             try {
-                const response = await fetch(`/manual-entry/search/?q=${encodeURIComponent(query)}`);
+                const response = await fetch(`/_b_a_c_k_e_n_d/HMIS/manual-entry/search/?q=${encodeURIComponent(query)}`);
                 const data = await response.json();
                 
                 if (data.length > 0) {
@@ -437,7 +437,7 @@
             document.getElementById('testDataCard').style.display = 'none';
 
             try {
-                const response = await fetch('/manual-entry/fetch-test-data/', {
+                const response = await fetch('/_b_a_c_k_e_n_d/HMIS/manual-entry/fetch-test-data/', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -509,7 +509,7 @@
             btnElement.innerText = '...';
 
             try {
-                const response = await fetch('/manual-entry/send/', {
+                const response = await fetch('/_b_a_c_k_e_n_d/HMIS/manual-entry/send/', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -561,7 +561,7 @@
             searchResults.style.display = 'none';
 
             try {
-                const response = await fetch('/manual-entry/send/', {
+                const response = await fetch('/_b_a_c_k_e_n_d/HMIS/manual-entry/send/', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
