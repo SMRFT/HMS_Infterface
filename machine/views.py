@@ -40,53 +40,91 @@ def log_result_action(bill_number, test_code, status, message, response_data=Non
 
 @csrf_exempt
 @api_view(['POST'])
-# @permission_classes([HasRolePermission])
 def create_hmsmi(request):
+
     logger.info("create_hmsmi API called")
     logger.info("Request Method: %s", request.method)
     logger.info("Request User: %s", getattr(request.user, "username", "Anonymous"))
     logger.info("Request Data: %s", request.data)
 
     try:
-        serializer = HMSMISerializer(data=request.data)
+
+        # Clean request keys and values
+        cleaned_data = {}
+
+        for key, value in request.data.items():
+
+            clean_key = key.strip()
+
+            if isinstance(value, str):
+                value = value.strip()
+
+            cleaned_data[clean_key] = value
+
+        logger.info("Cleaned Data: %s", cleaned_data)
+
+        serializer = HMSMISerializer(data=cleaned_data)
 
         if serializer.is_valid():
+
             serializer.save()
-            
-            # Auto-process the bill after receiving data
-            bill_number = request.data.get('BillNumber')
-            bill_type = request.data.get('BillType')
+
+            bill_number = cleaned_data.get('BillNumber')
+            bill_type = cleaned_data.get('BillType')
+
             if bill_number:
-                process_lab_result(bill_number, is_manual=False, bill_type=bill_type)
+                process_lab_result(
+                    bill_number,
+                    is_manual=False,
+                    bill_type=bill_type
+                )
 
             response_data = {
                 'success': True,
                 'data': serializer.data,
                 'message': 'Bill data received and processing initiated.'
             }
-            return Response(response_data, status=status.HTTP_200_OK)
+
+            return Response(
+                response_data,
+                status=status.HTTP_200_OK
+            )
 
         else:
+
             response_data = {
                 'success': False,
                 'errors': serializer.errors,
                 'message': 'Validation failed.'
             }
 
-            # Log validation error
-            logger.warning("create_hmsmi VALIDATION FAILED: %s", response_data)
-            return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+            logger.warning(
+                "create_hmsmi VALIDATION FAILED: %s",
+                response_data
+            )
+
+            return Response(
+                response_data,
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     except Exception as e:
+
         response_data = {
             'success': False,
             'errors': str(e),
             'message': 'An unexpected error occurred.'
         }
 
-        # Log exception with stack trace
-        logger.error("create_hmsmi EXCEPTION occurred", exc_info=True)
-        return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error(
+            "create_hmsmi EXCEPTION occurred",
+            exc_info=True
+        )
+
+        return Response(
+            response_data,
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 def save_test_result(machine, test_code, sub_test_code, result_value, approve_time, is_manual=False):
