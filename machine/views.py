@@ -12,8 +12,35 @@ from .models import TestResult, MachineAutomationLog, ManualEntryLog
 from pyauth.auth import HasRolePermission
 from django.views.decorators.csrf import csrf_exempt
 import logging
+from . import retry_service
 
 logger = logging.getLogger("hmsmi")
+
+
+def parse_approve_time(approve_time_val):
+    """Parses various datetime string formats into a Python datetime object."""
+    if not approve_time_val or str(approve_time_val).lower() in ("null", "none", "", "nan"):
+        return None
+    if isinstance(approve_time_val, datetime):
+        return approve_time_val
+    formats = (
+        "%Y-%m-%d %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d/%m/%Y %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%d",
+        "%d/%m/%Y"
+    )
+    clean_val = str(approve_time_val).strip()
+    for fmt in formats:
+        try:
+            return datetime.strptime(clean_val, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def log_result_action(bill_number, test_code, status, message, response_data=None, is_manual=False):
@@ -130,12 +157,13 @@ def create_hmsmi(request):
 def save_test_result(machine, test_code, sub_test_code, result_value, approve_time, is_manual=False):
     
     # STRICTLY process ONLY IP patients for automatic automation, allow manual overrides
-    if not is_manual and str(machine.get("IPOPType")).upper() != "IP":
+    ipop_type = str(machine.get("IPOPType") or "").strip().upper()
+    if not is_manual and ipop_type != "IP":
         log_result_action(
             bill_number=machine.get("BillNumber"),
             test_code=test_code,
             status="SKIPPED",
-            message=f"Skipped non-IP patient: {machine.get('IPOPType')}",
+            message=f"Skipped non-IP patient: {ipop_type}",
             is_manual=is_manual
         )
         return {"STATUS": 0, "MESSAGE": "SKIPPED_NON_IP"}
@@ -163,8 +191,8 @@ def save_test_result(machine, test_code, sub_test_code, result_value, approve_ti
     ).first()
 
     if existing_obj:
-        if existing_obj.status and "SUCCESS" in str(existing_obj.status).upper():
-            return {"STATUS": 0, "ERROR": "RESULT_ALREADY_ADDED"}
+        if existing_obj.status and ("SUCCESS" in str(existing_obj.status).upper() or '{"STATUS":1}' in str(existing_obj.status)):
+            return {"STATUS": 1, "MESSAGE": "RESULT_ALREADY_ADDED"}
         test_result_obj = existing_obj
         # Update existing object fields
         for key, value in result_data.items():
@@ -174,31 +202,66 @@ def save_test_result(machine, test_code, sub_test_code, result_value, approve_ti
         test_result_obj = TestResult.objects.create(**result_data)
 
     try:
-        # 1. Update the HMS API
+        # 1. Update the HMS API with timeout
+        hms_headers = {}
+        api_key = os.getenv("HMS_API_KEY")
+        if api_key:
+            hms_headers["Authorization"] = f"Token {api_key}"
+
         response = requests.post(
             "http://156.67.110.232:8019/lab-api/save-lab-result-data/",
             data=result_data,
-            headers={"Authorization": f"Token {os.getenv('HMS_API_KEY')}"}
+            headers=hms_headers,
+            timeout=10
         )
 
-        log_status = "SUCCESS" if response.status_code == 200 else "ERROR"
+        resp_text = response.text or ""
+        resp_json = None
+        try:
+            resp_json = response.json()
+        except Exception:
+            resp_json = {}
+
+        # Evaluate response accurately
+        is_success = False
+        is_already_given = False
+
+        if response.status_code == 200:
+            if isinstance(resp_json, dict):
+                if resp_json.get("STATUS") == 1 or resp_json.get("status") is True:
+                    is_success = True
+                elif "RESULT_ALREADY_GIVEN" in str(resp_json.get("ERROR", "")).upper():
+                    is_already_given = True
+                elif "SUCCESS" in str(resp_json).upper():
+                    is_success = True
+            elif '{"STATUS":1}' in resp_text or "SUCCESS" in resp_text.upper():
+                is_success = True
+            elif "RESULT_ALREADY_GIVEN" in resp_text.upper():
+                is_already_given = True
+
+        if is_success or is_already_given:
+            log_status = "SUCCESS"
+            log_msg = f"API Response Code: 200 (Saved)" if is_success else "API Response: Result already recorded"
+        else:
+            log_status = "ERROR"
+            log_msg = f"API Response Code: {response.status_code}"
+
         log_result_action(
             bill_number=machine.get("BillNumber"),
             test_code=test_code,
             status=log_status,
-            message=f"API Response Code: {response.status_code}",
-            response_data=response.text,
+            message=log_msg,
+            response_data=resp_text,
             is_manual=is_manual
         )
 
-        if response.status_code == 200:
-            test_result_obj.status = response.text
+        if is_success or is_already_given:
+            test_result_obj.status = resp_text
             test_result_obj.save()
             
-            # 2. ALSO update the local machine_hmsmi collection in MongoDB
+            # 2. ALSO update the local machine_hmsmi collection in MongoDB using shared db
             try:
-                client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
-                db = client['Diagnostics']
+                db = retry_service.get_mongo_db()
                 machine_col = db['machine_hmsmi']
                 
                 # Update based on the original machine record's ID to be precise
@@ -210,17 +273,25 @@ def save_test_result(machine, test_code, sub_test_code, result_value, approve_ti
                         "resulttime": result_data["resulttime"],
                         "testcode": test_code,
                         "subtestcode": sub_test_code,
-                        "status": '{"STATUS":1}'
+                        "status": '{"STATUS":1}' if is_success else resp_text
                     }}
                 )
-                client.close()
             except Exception as mongo_err:
                 logger.error(f"Failed to update machine_hmsmi: {str(mongo_err)}")
                 
-            return {"STATUS": 1, "MESSAGE": "SUCCESS"}
+            return {"STATUS": 1, "MESSAGE": "SUCCESS" if is_success else "ALREADY_GIVEN"}
         else:
-            return {"STATUS": 0, "ERROR": "API_ERROR", "DETAILS": response.text}
+            return {"STATUS": 0, "ERROR": "API_ERROR", "DETAILS": resp_text, "RETRYABLE": True}
 
+    except requests.exceptions.Timeout as timeout_err:
+        log_result_action(
+            bill_number=machine.get("BillNumber"),
+            test_code=test_code,
+            status="ERROR",
+            message=f"HMS API Connection Timeout (10s): {str(timeout_err)}",
+            is_manual=is_manual
+        )
+        return {"STATUS": 0, "ERROR": "API_TIMEOUT", "RETRYABLE": True}
     except Exception as e:
         log_result_action(
             bill_number=machine.get("BillNumber"),
@@ -229,12 +300,10 @@ def save_test_result(machine, test_code, sub_test_code, result_value, approve_ti
             message=str(e),
             is_manual=is_manual
         )
-        return {"STATUS": 0, "ERROR": str(e)}
+        return {"STATUS": 0, "ERROR": str(e), "RETRYABLE": True}
 
 def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_filter=None):
-    mongo_url = os.getenv("GLOBAL_DB_HOST")
-    client = MongoClient(mongo_url)
-    db = client.Diagnostics
+    db = retry_service.get_mongo_db()
     machine_col = db.machine_hmsmi
     core_value_col = db.core_testvalue
     core_detail_col = db.core_testdetails
@@ -257,6 +326,14 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
         machine_records = list(machine_col.find({"BillNumber": formatted_bill, "BillType": bill_type_from_input}))
         
     if not machine_records:
+        if not is_manual:
+            retry_service.enqueue_for_retry(
+                barcode=bill_number,
+                bill_number=bill_number,
+                reason="BILL_NOT_FOUND",
+                error_msg=f"Machine HMSMI records not found for bill {bill_number}",
+                max_retries=10
+            )
         log_result_action(
             bill_number=bill_number,
             test_code=None,
@@ -269,6 +346,19 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
     # 2. Get BillType from machine records for barcode fallback
     primary_machine_rec = machine_records[0]
     bill_type = primary_machine_rec.get("BillType")
+    patient_name = primary_machine_rec.get("PatientName")
+    ipop_type = str(primary_machine_rec.get("IPOPType") or "").strip().upper()
+
+    # If automatic and not IP, exit early to avoid wasted processing
+    if not is_manual and ipop_type != "IP":
+        log_result_action(
+            bill_number=bill_number,
+            test_code=None,
+            status="SKIPPED",
+            message=f"Skipped non-IP patient: {ipop_type}",
+            is_manual=is_manual
+        )
+        return {"status": "skipped", "message": f"Skipped non-IP patient: {ipop_type}"}
 
     # 3. Fetch core_testvalue using barcode
     normalized_bill = bill_number.replace("/", "")
@@ -280,6 +370,16 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
         core_values = list(core_value_col.find({"barcode": extended_barcode}))
 
     if not core_values:
+        if not is_manual and ipop_type == "IP":
+            retry_service.enqueue_for_retry(
+                barcode=normalized_bill,
+                bill_number=bill_number,
+                patient_name=patient_name,
+                bill_type=bill_type,
+                reason="CORE_VALUES_PENDING",
+                error_msg="Core test value not found in MongoDB (machine has not produced results yet)",
+                max_retries=20
+            )
         log_result_action(
             bill_number=bill_number,
             test_code=None,
@@ -300,7 +400,7 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
                     # Robust filtering: check multiple possible identifying fields
                     details = [
                         t for t in details 
-                        if str(t.get('test_code') or t.get('testname') or t.get('name') or t.get('test_id')) == str(test_code_filter)
+                        if str(t.get('test_code') or t.get('testname') or t.get('name') or t.get('test_id')).strip().upper() == str(test_code_filter).strip().upper()
                     ]
                 all_testdetails.extend(details)
         except (TypeError, json.JSONDecodeError):
@@ -318,20 +418,20 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
 
     processed_count = 0
     errors = []
+    has_unapproved_results = False
     
     # 5. Build machine_map: map potential identifiers to machine records
     machine_map = {}
     for m in machine_records:
-        st_code = str(m.get("SubTestcode") or "").strip()
-        t_code = str(m.get("TestCode") or "").strip()
-        st_name = str(m.get("SubTestName") or "").strip()
+        st_code = str(m.get("SubTestcode") or "").strip().upper()
+        t_code = str(m.get("TestCode") or "").strip().upper()
+        st_name = str(m.get("SubTestName") or "").strip().upper()
         
         if st_code: machine_map[st_code] = m
         if t_code: machine_map[t_code] = m
         if st_name: machine_map[st_name] = m # Fallback to name match if codes fail
 
-
-    # 5. Iterate through ALL aggregated test results
+    # 6. Iterate through ALL aggregated test results
     for test in all_testdetails:
         # Try to get test_id from multiple possible locations
         test_id = test.get("test_id") or test.get("id")
@@ -351,16 +451,9 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
         # Prepare list of result items to process from this test entry
         result_items = []
 
-        # Parse approve_time
+        # Parse approve_time robustly
         approve_time_str = test.get("approve_time")
-        approve_time_dt = None
-        if approve_time_str and approve_time_str != "null":
-            for fmt in ("%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M"):
-                try:
-                    approve_time_dt = datetime.strptime(approve_time_str, fmt)
-                    break
-                except ValueError:
-                    continue
+        approve_time_dt = parse_approve_time(approve_time_str)
 
         if "parameters" in test and isinstance(test["parameters"], list) and test["parameters"]:
             # Nested parameters in result (e.g. from Analyzer)
@@ -389,11 +482,20 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
 
             if (not result_test_code and not result_test_name) or result_value is None or approve_time is None:
                 if approve_time is None and (result_test_code or result_test_name):
-                     log_result_action(
+                    has_unapproved_results = True
+                    if ipop_type == "IP" and not is_manual:
+                        retry_service.enqueue_for_approval(
+                            barcode=normalized_bill,
+                            bill_number=bill_number,
+                            patient_name=patient_name,
+                            bill_type=bill_type,
+                            details=f"Test {result_test_name or result_test_code} pending approval"
+                        )
+                    log_result_action(
                         bill_number=bill_number,
                         test_code=result_test_code or result_test_name,
                         status="SKIPPED",
-                        message="Result not approved (approve_time is null)",
+                        message="Result not approved (approve_time is null). Queued to wait for approval.",
                         is_manual=is_manual
                     )
                 continue
@@ -410,36 +512,37 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
                     flat_params.extend(p_list)
                 master_params = flat_params
             
+            clean_res_code = str(result_test_code or "").strip().upper()
             for p in master_params:
-                # Match result to master parameter by test_code
-                if str(p.get("test_code") or p.get("test_name") or p.get("name")) == str(result_test_code):
+                p_code = str(p.get("test_code") or p.get("test_name") or p.get("name") or "").strip().upper()
+                if p_code == clean_res_code and clean_res_code:
                     sub_code = p.get("hms_subtestcode")
                     if sub_code and str(sub_code) != "0":
-                        potential_hms_codes.add(str(sub_code))
+                        potential_hms_codes.add(str(sub_code).strip().upper())
 
-                # Match result to master parameter by hms_subtestcode
-                if str(p.get("hms_subtestcode")) == str(result_test_code):
-                    potential_hms_codes.add(str(result_test_code))
+                p_sub = str(p.get("hms_subtestcode") or "").strip().upper()
+                if p_sub == clean_res_code and clean_res_code:
+                    potential_hms_codes.add(clean_res_code)
 
             # B. Main Test Code Match 
             main_code = test_master.get("hms_testcode")
             if main_code and str(main_code) != "0":
-                 potential_hms_codes.add(str(main_code))
+                potential_hms_codes.add(str(main_code).strip().upper())
 
             # C. Direct Match (Legacy/Fallback)
-            master_test_code = test_master.get("test_code")
-            if master_test_code and result_test_code and str(master_test_code) == str(result_test_code):
-                 sub_code = test_master.get("hms_subtestcode")
-                 if sub_code and str(sub_code) != "0":
-                     potential_hms_codes.add(str(sub_code))
+            master_test_code = str(test_master.get("test_code") or "").strip().upper()
+            if master_test_code and clean_res_code and master_test_code == clean_res_code:
+                sub_code = test_master.get("hms_subtestcode")
+                if sub_code and str(sub_code) != "0":
+                    potential_hms_codes.add(str(sub_code).strip().upper())
 
             # D. Direct Match from Analyzer Code (Fallback)
-            if result_test_code:
-                potential_hms_codes.add(str(result_test_code))
+            if clean_res_code:
+                potential_hms_codes.add(clean_res_code)
             
             # E. Name Match (Fallback)
             if result_test_name:
-                potential_hms_codes.add(str(result_test_name))
+                potential_hms_codes.add(str(result_test_name).strip().upper())
             
             # If we have no candidates, skip
             if not potential_hms_codes:
@@ -456,7 +559,7 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
                     # Try to find the specific sub-code from master if we matched a parameter
                     final_sub_code = machine_record.get("SubTestcode")
                     for p in master_params:
-                        if str(p.get("hms_subtestcode")) == str(hms_code):
+                        if str(p.get("hms_subtestcode") or "").strip().upper() == str(hms_code):
                             final_sub_code = hms_code
                             break
 
@@ -471,11 +574,19 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
                     if save_resp.get("STATUS") == 1:
                         processed_count += 1
                         match_found = True
+                    elif save_resp.get("RETRYABLE"):
+                        errors.append(f"Save error for {result_test_code}: {save_resp.get('ERROR')}")
             
             if not match_found:
                 errors.append(f"No matching machine record for test {result_test_code} (Checked codes: {potential_hms_codes})")
 
     if processed_count > 0:
+        if not is_manual:
+            retry_service.mark_resolved(
+                barcode=normalized_bill,
+                bill_number=bill_number,
+                message=f"Successfully posted {processed_count} results"
+            )
         log_result_action(
             bill_number=bill_number,
             test_code=None,
@@ -489,18 +600,29 @@ def process_lab_result(bill_number, is_manual=False, bill_type=None, test_code_f
             "message": "Results posted successfully"
         }
     
+    if not is_manual and ipop_type == "IP":
+        if any("API" in str(err).upper() or "TIMEOUT" in str(err).upper() for err in errors):
+            retry_service.enqueue_for_retry(
+                barcode=normalized_bill,
+                bill_number=bill_number,
+                patient_name=patient_name,
+                bill_type=bill_type,
+                reason="API_ERROR",
+                error_msg="; ".join(errors)[:250]
+            )
+
     log_result_action(
         bill_number=bill_number,
         test_code=None,
         status="WARNING",
-        message="No new results matched or saved",
+        message="No new results matched or saved" if not has_unapproved_results else "Results pending approval",
         response_data={"debug_errors": errors},
         is_manual=is_manual
     )
     return {
         "status": "partial_success",
         "processed": 0,
-        "message": "No new results matched or saved.",
+        "message": "No new results matched or saved." if not has_unapproved_results else "Results pending approval.",
         "debug_errors": errors
     }
 
@@ -562,9 +684,7 @@ def search_machine_records(request):
         return Response([], status=status.HTTP_200_OK)
     
     try:
-        mongo_url = os.getenv("GLOBAL_DB_HOST")
-        client = MongoClient(mongo_url)
-        db = client.Diagnostics
+        db = retry_service.get_mongo_db()
         col = db.machine_hmsmi
         
         # Search by BillNumber, IPOPNumber, or PatientName
@@ -619,9 +739,7 @@ def fetch_test_data(request):
         return Response({"error": "Bill number is required"}, status=status.HTTP_400_BAD_REQUEST)
         
     try:
-        mongo_url = os.getenv("GLOBAL_DB_HOST")
-        client = MongoClient(mongo_url)
-        db = client.Diagnostics
+        db = retry_service.get_mongo_db()
         machine_col = db.machine_hmsmi
         core_value_col = db.core_testvalue
         
@@ -671,3 +789,65 @@ def fetch_test_data(request):
         
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+def get_queue_status(request):
+    """Returns retry queue stats and recent queue entries."""
+    try:
+        summary = retry_service.get_queue_summary()
+        status_filter = request.GET.get('status')
+        items = retry_service.get_recent_queue_items(limit=50, status_filter=status_filter)
+        return Response({
+            "success": True,
+            "summary": summary,
+            "items": items
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+def retry_all_queue(request):
+    """Forces all pending, waiting, or failed items to retry immediately."""
+    try:
+        reset_count = retry_service.force_retry_all()
+        # Immediately process due items
+        due_items = retry_service.get_due_items(limit=30)
+        processed = []
+        for item in due_items:
+            barcode = item.get("barcode") or item.get("bill_number")
+            bill_type = item.get("bill_type")
+            res = process_lab_result(barcode, is_manual=True, bill_type=bill_type)
+            processed.append({
+                "barcode": barcode,
+                "status": res.get("status") or ("error" if "error" in res else "unknown"),
+                "processed_count": res.get("processed", 0)
+            })
+        return Response({
+            "success": True,
+            "reset_count": reset_count,
+            "attempted_count": len(processed),
+            "details": processed
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+def retry_single_item(request):
+    """Forces a single item to retry immediately."""
+    identifier = request.data.get('identifier')
+    bill_type = request.data.get('bill_type')
+    if not identifier:
+        return Response({"error": "Identifier (barcode or bill number) is required"}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        retry_service.force_retry_single(identifier)
+        res = process_lab_result(identifier, is_manual=True, bill_type=bill_type)
+        return Response({
+            "success": True,
+            "result": res
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+

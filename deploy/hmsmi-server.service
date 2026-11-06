@@ -1,0 +1,17 @@
+[Unit]
+Description=HMS Machine Interface Django Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/path/to/HMS_Infterface
+ExecStart=/path/to/HMS_Infterface/venv/bin/python manage.py runserver 0.0.0.0:1310
+Restart=always
+RestartSec=5
+StandardOutput=append:/path/to/HMS_Infterface/logs/server.log
+StandardError=append:/path/to/HMS_Infterface/logs/server_err.log
+
+[Install]
+WantedBy=multi-user.target
+

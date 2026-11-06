@@ -1,0 +1,17 @@
+[Unit]
+Description=HMS Machine Interface Automation & Retry Worker
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/path/to/HMS_Infterface
+ExecStart=/path/to/HMS_Infterface/venv/bin/python manage.py automate_results
+Restart=always
+RestartSec=5
+StandardOutput=append:/path/to/HMS_Infterface/logs/automation.log
+StandardError=append:/path/to/HMS_Infterface/logs/automation_err.log
+
+[Install]
+WantedBy=multi-user.target
+
