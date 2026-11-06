@@ -106,9 +106,15 @@ def create_hmsmi(request):
                     bill_type=bill_type
                 )
 
+            try:
+                ser_data = serializer.data
+            except Exception as ser_err:
+                logger.warning("Serializer data representation error: %s", ser_err)
+                ser_data = cleaned_data
+
             response_data = {
                 'success': True,
-                'data': serializer.data,
+                'data': ser_data,
                 'message': 'Bill data received and processing initiated.'
             }
 
