@@ -201,6 +201,24 @@
         .badge-success { background: rgba(16, 185, 129, 0.1); color: var(--success); }
         .badge-error { background: rgba(239, 68, 68, 0.1); color: var(--error); }
         .badge-warning { background: rgba(245, 158, 11, 0.1); color: var(--warning); }
+        .badge-info { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
+        .badge-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
+
+        .queue-tab {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--glass-border);
+            color: var(--text-muted);
+            padding: 0.4rem 0.9rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .queue-tab.active, .queue-tab:hover {
+            background: rgba(255, 255, 255, 0.15);
+            color: white;
+            border-color: var(--primary);
+        }
 
         .time { color: var(--text-muted); font-size: 0.875rem; }
 
@@ -303,6 +321,75 @@
                 </div>
                 <div style="margin-top: 1.5rem; display: flex; justify-content: flex-end;">
                     <button class="btn-send" style="width: auto; padding: 0.75rem 2rem;" onclick="processAllResults()">Process All Results</button>
+                </div>
+            </div>
+
+            <!-- Live Queue Section -->
+            <div class="logs-section" style="margin-top: 3.5rem;">
+                <div class="logs-header">
+                    <div>
+                        <h2>Live Automation & Retry Queue</h2>
+                        <p class="subtitle" style="font-size: 0.85rem; margin-top: 0.25rem;">Automatic monitoring for results waiting for approval or scheduled retries</p>
+                    </div>
+                    <div style="display: flex; gap: 0.75rem;">
+                        <button class="btn-send" style="width: auto; padding: 0.6rem 1.25rem; font-size: 0.9rem; background: rgba(255, 255, 255, 0.1);" onclick="fetchQueueData()">
+                            ↻ Refresh
+                        </button>
+                        <button class="btn-send" id="retryAllBtn" style="width: auto; padding: 0.6rem 1.25rem; font-size: 0.9rem;" onclick="retryAllQueue()">
+                            <span class="loader" id="retryAllLoader" style="width: 14px; height: 14px; margin-right: 6px;"></span>
+                            Retry All Pending Now
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stats Cards -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                    <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 12px; padding: 1rem; text-align: center;">
+                        <div style="font-size: 0.75rem; text-transform: uppercase; color: var(--warning); font-weight: 600;">Waiting Approval</div>
+                        <div id="statWaiting" style="font-size: 1.8rem; font-weight: 700; margin-top: 0.25rem; color: #fbbf24;">0</div>
+                    </div>
+                    <div style="background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 12px; padding: 1rem; text-align: center;">
+                        <div style="font-size: 0.75rem; text-transform: uppercase; color: #38bdf8; font-weight: 600;">Retrying (API)</div>
+                        <div id="statRetrying" style="font-size: 1.8rem; font-weight: 700; margin-top: 0.25rem; color: #38bdf8;">0</div>
+                    </div>
+                    <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 12px; padding: 1rem; text-align: center;">
+                        <div style="font-size: 0.75rem; text-transform: uppercase; color: var(--error); font-weight: 600;">Permanent Failed</div>
+                        <div id="statFailed" style="font-size: 1.8rem; font-weight: 700; margin-top: 0.25rem; color: #f87171;">0</div>
+                    </div>
+                    <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 12px; padding: 1rem; text-align: center;">
+                        <div style="font-size: 0.75rem; text-transform: uppercase; color: var(--success); font-weight: 600;">Resolved</div>
+                        <div id="statResolved" style="font-size: 1.8rem; font-weight: 700; margin-top: 0.25rem; color: #34d399;">0</div>
+                    </div>
+                </div>
+
+                <!-- Filter Tabs -->
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                    <button class="queue-tab active" onclick="filterQueue('ALL', this)">All</button>
+                    <button class="queue-tab" onclick="filterQueue('WAITING_APPROVAL', this)">Waiting Approval</button>
+                    <button class="queue-tab" onclick="filterQueue('PENDING_RETRY', this)">Retrying</button>
+                    <button class="queue-tab" onclick="filterQueue('FAILED_PERMANENT', this)">Failed</button>
+                    <button class="queue-tab" onclick="filterQueue('RESOLVED', this)">Resolved</button>
+                </div>
+
+                <div class="log-table-container" style="max-height: 400px; overflow-y: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Barcode / Bill</th>
+                                <th>Patient Name</th>
+                                <th>Status</th>
+                                <th>Retries</th>
+                                <th>Next Check</th>
+                                <th>Reason / Details</th>
+                                <th style="text-align: right;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="queueBody">
+                            <tr>
+                                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">Loading queue items...</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -623,6 +710,179 @@
             }
             return cookieValue;
         }
+
+        // ==========================================
+        // Live Queue & Retry Dashboard Logic
+        // ==========================================
+        const apiPrefix = window.location.pathname.includes('_b_a_c_k_e_n_d') ? '/_b_a_c_k_e_n_d/HMIS' : '';
+        let currentQueueFilter = 'ALL';
+
+        async function fetchQueueData() {
+            try {
+                let url = `${apiPrefix}/manual-entry/queue-status/`;
+                if (currentQueueFilter && currentQueueFilter !== 'ALL') {
+                    url += `?status=${encodeURIComponent(currentQueueFilter)}`;
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    // Update stats
+                    const summary = data.summary || {};
+                    document.getElementById('statWaiting').innerText = summary.WAITING_APPROVAL || 0;
+                    document.getElementById('statRetrying').innerText = summary.PENDING_RETRY || 0;
+                    document.getElementById('statFailed').innerText = summary.FAILED_PERMANENT || 0;
+                    document.getElementById('statResolved').innerText = summary.RESOLVED || 0;
+
+                    renderQueueTable(data.items || []);
+                }
+            } catch (error) {
+                console.error('Failed to load queue data:', error);
+            }
+        }
+
+        function renderQueueTable(items) {
+            const tbody = document.getElementById('queueBody');
+            tbody.innerHTML = '';
+
+            if (items.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                            No items in the retry queue.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            items.forEach(it => {
+                const tr = document.createElement('tr');
+                const ident = it.barcode || it.bill_number || '-';
+                const pName = it.patient_name || '-';
+                const status = it.status || 'UNKNOWN';
+
+                let badgeClass = 'badge-warning';
+                let statusLabel = status;
+                if (status === 'WAITING_APPROVAL') {
+                    badgeClass = 'badge-warning';
+                    statusLabel = 'Waiting Approval';
+                } else if (status === 'PENDING_RETRY') {
+                    badgeClass = 'badge-info';
+                    statusLabel = 'Retrying';
+                } else if (status === 'FAILED_PERMANENT') {
+                    badgeClass = 'badge-error';
+                    statusLabel = 'Failed';
+                } else if (status === 'RESOLVED') {
+                    badgeClass = 'badge-success';
+                    statusLabel = 'Resolved';
+                }
+
+                const retryCount = `${it.retry_count || 0} / ${it.max_retries || 5}`;
+                const nextCheck = it.next_retry_time_str || '-';
+                const reason = it.last_error || it.reason || '-';
+
+                tr.innerHTML = `
+                    <td>
+                        <div style="font-weight: 600; color: var(--primary);">${ident}</div>
+                        ${it.bill_type ? `<span style="font-size: 0.75rem; color: var(--text-muted);">Type: ${it.bill_type}</span>` : ''}
+                    </td>
+                    <td>${pName}</td>
+                    <td><span class="badge ${badgeClass}">${statusLabel}</span></td>
+                    <td style="font-size: 0.85rem;">${retryCount}</td>
+                    <td class="time" style="font-size: 0.8rem;">${nextCheck}</td>
+                    <td style="font-size: 0.85rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${reason}">
+                        ${reason}
+                    </td>
+                    <td style="text-align: right;">
+                        <button class="btn-send" style="width: auto; padding: 0.4rem 0.8rem; font-size: 0.8rem;"
+                                onclick="retrySingleQueueItem('${ident}', '${it.bill_type || ''}', this)">
+                            Retry Now
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function filterQueue(status, tabElement) {
+            currentQueueFilter = status;
+            document.querySelectorAll('.queue-tab').forEach(t => t.classList.remove('active'));
+            if (tabElement) {
+                tabElement.classList.add('active');
+            }
+            fetchQueueData();
+        }
+
+        async function retryAllQueue() {
+            const btn = document.getElementById('retryAllBtn');
+            const loader = document.getElementById('retryAllLoader');
+
+            btn.disabled = true;
+            loader.style.display = 'inline-block';
+
+            try {
+                const response = await fetch(`${apiPrefix}/manual-entry/retry-all/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    }
+                });
+                const data = await response.json();
+                if (response.ok && data.success) {
+                    showToast(`Queued ${data.reset_count || 0} items. Attempted ${data.attempted_count || 0}.`, 'success');
+                    fetchQueueData();
+                } else {
+                    showToast(data.error || 'Failed to retry queue', 'error');
+                }
+            } catch (err) {
+                showToast('Network error while retrying queue', 'error');
+            } finally {
+                btn.disabled = false;
+                loader.style.display = 'none';
+            }
+        }
+
+        async function retrySingleQueueItem(identifier, billType, btnElement) {
+            const originalText = btnElement.innerText;
+            btnElement.disabled = true;
+            btnElement.innerText = '...';
+
+            try {
+                const response = await fetch(`${apiPrefix}/manual-entry/retry-single/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({
+                        identifier: identifier,
+                        bill_type: billType
+                    })
+                });
+                const data = await response.json();
+                if (response.ok && data.success) {
+                    showToast(`Retried ${identifier}: ${data.result?.status || 'Done'}`, 'success');
+                    fetchQueueData();
+                } else {
+                    showToast(data.error || 'Failed to retry item', 'error');
+                    btnElement.disabled = false;
+                    btnElement.innerText = originalText;
+                }
+            } catch (err) {
+                showToast('Network error', 'error');
+                btnElement.disabled = false;
+                btnElement.innerText = originalText;
+            }
+        }
+
+        // Auto load queue data and poll every 10 seconds
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchQueueData();
+            setInterval(fetchQueueData, 10000);
+        });
     </script>
 </body>
 </html>
